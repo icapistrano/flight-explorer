@@ -15,16 +15,18 @@ interface PaperPlaneControllerProps {
   maxBankAngle?: number; // Maximum bank angle
   bankSpeed?: number; // Bank speed
   maxOffsetFromCenter?: number; // Maximum offset from center
+  yawMaxAngle?: number; // Maximum yaw angle
 }
 
 export const PaperPlaneController: FC<PaperPlaneControllerProps> = ({
-  maxSpeed = 2,
+  maxSpeed = 1.5,
   minSpeed = 0.1,
   acceleration = 0.005,
   deceleration = 0.005,
   maxBankAngle = THREE.MathUtils.degToRad(45),
-  bankSpeed = 0.7,
-  maxOffsetFromCenter = 2,
+  bankSpeed = 1,
+  maxOffsetFromCenter = 5,
+  yawMaxAngle = 5,
 }: PaperPlaneControllerProps) => {
   const { setPosition, setRotation } = usePlaneStore();
   const { radius } = useGlobeStore();
@@ -46,59 +48,64 @@ export const PaperPlaneController: FC<PaperPlaneControllerProps> = ({
 
   const bankAngle = useRef(0);
   const targetBankAngle = useRef(0);
+  const currentYawRotation = useRef(0);
 
-  // === Animation Frame ===
-  useFrame((_, delta) => {
-    if (
-      !orbitPivotRef.current ||
-      !planeCoordSysRef.current ||
-      !planeRef.current
-    )
-      return;
+  const updateBankingAndLateralMovement = (
+    a: boolean,
+    d: boolean,
+    delta: number,
+  ) => {
+    if (!planeRef.current) return;
 
-    const { w, s, a, d } = keys;
-
-    let normalizedBank = 0; // -1 to 1
-
-    // Rotation controls (A/D) with realistic banking and turning
     if (a || d) {
-      const bankSpeed = currentVelocity.current;
-
       // Set target bank angle based on input
       targetBankAngle.current = a ? -maxBankAngle : maxBankAngle;
-
-      // Gradually adjust current bank angle towards target
-      bankAngle.current +=
-        (targetBankAngle.current - bankAngle.current) * bankSpeed * delta;
-
-      // Apply banking rotation to the plane
-      planeRef.current.rotation.y = bankAngle.current;
     } else {
       // Gradually return to level flight when no input
       targetBankAngle.current = 0;
-      bankAngle.current +=
-        (targetBankAngle.current - bankAngle.current) * bankSpeed * delta;
-      planeRef.current.rotation.y = bankAngle.current;
     }
+
+    // Gradually adjust current bank angle towards target
+    bankAngle.current +=
+      (targetBankAngle.current - bankAngle.current) * bankSpeed * delta;
+
+    planeRef.current.rotation.y = bankAngle.current;
 
     // Gradually move laterally or return to center position based on bank angle
-    normalizedBank = bankAngle.current / maxBankAngle;
+    const normalizedBank = bankAngle.current / maxBankAngle; // -1 to 1
     planeRef.current.position.z = normalizedBank * maxOffsetFromCenter;
+  };
 
-    // Rotation controls (A/D) along the plane's local up axis
-    if (a || d) {
-      const rotationSpeed = Math.abs(normalizedBank);
-      const pitchDirection = a ? rotationSpeed : -rotationSpeed;
-      planeCoordSysRef.current.rotateX(pitchDirection * delta);
+  const updatePlaneHeading = (a: boolean, d: boolean, delta: number) => {
+    if (!planeCoordSysRef.current) return;
 
-      const forwardVector = forwardDir.current
-        .set(0, 1, 0)
-        .applyQuaternion(planeCoordSysRef.current.quaternion);
+    const normalizedBank = bankAngle.current / maxBankAngle; // -1 to 1
 
-      orbitalPlaneAxisRef.current
-        .crossVectors(planeCoordSysRef.current.position, forwardVector)
-        .normalize();
-    }
+    // Invert yaw rotation when A or D is pressed:
+    // e.g. The plane is on the right side of the screen but its heading would be pointing to the left
+    const yawDirection = a || d ? normalizedBank * -1 : normalizedBank;
+    const yawRotationTarget = yawDirection * yawMaxAngle;
+
+    const yawRotationSpeed = a || d ? 3 : 0.5;
+    currentYawRotation.current = THREE.MathUtils.lerp(
+      currentYawRotation.current,
+      yawRotationTarget,
+      yawRotationSpeed * delta,
+    );
+
+    planeCoordSysRef.current.rotateX(currentYawRotation.current * delta);
+
+    const forwardVector = forwardDir.current
+      .set(0, 1, 0)
+      .applyQuaternion(planeCoordSysRef.current.quaternion);
+
+    orbitalPlaneAxisRef.current
+      .crossVectors(planeCoordSysRef.current.position, forwardVector)
+      .normalize();
+  };
+
+  const updateThrustAndMovement = (w: boolean, s: boolean, delta: number) => {
+    if (!orbitPivotRef.current) return;
 
     // Thrust controls (W/S) with acceleration
     if (w) {
@@ -111,7 +118,6 @@ export const PaperPlaneController: FC<PaperPlaneControllerProps> = ({
       // Decelerate
       currentVelocity.current = Math.max(
         currentVelocity.current - acceleration,
-        // -maxSpeed / 2,
         minSpeed,
       );
     } else {
@@ -133,7 +139,24 @@ export const PaperPlaneController: FC<PaperPlaneControllerProps> = ({
       currentVelocity.current * delta,
     );
     orbitPivotRef.current.quaternion.premultiply(rotation);
+  };
 
+  // === Animation Frame ===
+  useFrame((_, delta) => {
+    if (!planeCoordSysRef.current) return;
+
+    const { w, s, a, d } = keys;
+
+    // Banking, offset from its parent's z-axis (A/D)
+    updateBankingAndLateralMovement(a, d, delta);
+
+    // Rotation controls along the plane's local up axis (A/D)
+    updatePlaneHeading(a, d, delta);
+
+    // Thrust and orbital movement (W/S)
+    updateThrustAndMovement(w, s, delta);
+
+    // Update store
     const worldV = planeCoordSysRef.current.getWorldPosition(tmpV.current);
     const worldRotation = planeCoordSysRef.current.getWorldQuaternion(
       tmpQ.current,
@@ -148,6 +171,7 @@ export const PaperPlaneController: FC<PaperPlaneControllerProps> = ({
       <group ref={planeCoordSysRef} position={[radius * 1.01, 0, 0]}>
         <axesHelper scale={1} />
         <group ref={planeRef}>
+          <axesHelper scale={1} />
           <PaperPlane scale={3} rotation={[0, Math.PI / 2, 0]} />
         </group>
       </group>
