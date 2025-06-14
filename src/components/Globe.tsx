@@ -1,7 +1,8 @@
+import * as THREE from "three";
 import { FC, useRef } from "react";
 import { useFrame, useLoader } from "@react-three/fiber";
-import { Sphere, useTexture, useGLTF } from "@react-three/drei";
-import * as THREE from "three";
+import { Sphere, useTexture } from "@react-three/drei";
+import { useGlobeStore } from "../store/Globe.store";
 
 const CloudLayer: FC<{ radius: number }> = ({ radius = 1 }) => {
   const cloudRef = useRef<THREE.Mesh>(null);
@@ -26,7 +27,9 @@ const CloudLayer: FC<{ radius: number }> = ({ radius = 1 }) => {
   );
 };
 
-export const Globe: FC<{ radius?: number }> = ({ radius = 1 }) => {
+export const Globe = () => {
+  const { radius } = useGlobeStore();
+
   const meshRef = useRef<THREE.Mesh>(null);
   const groupRef = useRef<THREE.Group>(null);
 
@@ -36,15 +39,8 @@ export const Globe: FC<{ radius?: number }> = ({ radius = 1 }) => {
     "/earth-specular.jpg",
   ]);
 
-  //   useFrame(() => {
-  //     if (meshRef.current) {
-  //       meshRef.current.rotation.y += 0.001;
-  //     }
-  //   });
-
   return (
     <group ref={groupRef} rotation={[0, 0, THREE.MathUtils.degToRad(-23.5)]}>
-      <axesHelper scale={10} />
       <Sphere ref={meshRef} args={[radius, 64, 64]}>
         <meshStandardMaterial
           map={textureMap}
@@ -55,7 +51,7 @@ export const Globe: FC<{ radius?: number }> = ({ radius = 1 }) => {
           metalness={0.1}
         />
       </Sphere>
-      <CloudLayer radius={radius + 0.01} />
+      <CloudLayer radius={radius + 0.05} />
     </group>
   );
 };
